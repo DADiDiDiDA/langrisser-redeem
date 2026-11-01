@@ -2,27 +2,34 @@
 Langrisser (梦幻模拟战) BWIKI 兑换码自动领取脚本
 
 原理：用 Playwright 像真人一样打开 BWIKI 礼品码页面，选择服务器、填入角色 ID，
-然后逐个点击状态为“领取”的按钮。由于“领取”走的是动态签名机制，浏览器自动化
-比直接 requests 模拟更稳妥。
+然后逐个点击状态为「领取 / 仅领取」的按钮。由于「领取」走的是动态签名机制，
+浏览器自动化比直接 requests 模拟更稳妥。
+
+页面真实结构（已实测）：
+  - 服务器：点 #Server 打开 #ServerModal 弹窗，按大区切 tab，再点
+    span.ServerName（文本含服务器名，如「热爱无限」）。
+  - 角色 ID：输入框 #roleid（注意是小写 id）。
+  - 领取按钮：span.get（可领，文本「领取」）；已领/过期为 span.got，不会被选中，
+    因此按 class 选取可避免重复点击。
 
 账号已内置默认值：服务器「热爱无限」、角色 ID「3423789005821014377」。
 如需覆盖，仍可用环境变量（非空时优先）：
-  GAME_SERVER  游戏区服名称
+  GAME_SERVER  游戏区服/子服务器名称
   GAME_ROLE_ID 角色 ID（游戏内左上角头像处查看）
 
 本地调试（覆盖默认值示例）：
-  GAME_SERVER="启源之地" GAME_ROLE_ID="3423789005821014377" python redeem.py
+  GAME_SERVER="热爱无限" GAME_ROLE_ID="3423789005821014377" python redeem.py
 """
 
 import asyncio
 import os
+import traceback
 
 from playwright.async_api import async_playwright
 
 URL = "https://wiki.biligame.com/langrisser/Giftcode"
 
 # 默认值已按你的账号填好；如需覆盖，仍可通过环境变量 / Secrets 设置
-# GAME_SERVER 与 GAME_ROLE_ID（非空时优先使用环境变量）。
 DEFAULT_SERVER = "热爱无限"
 DEFAULT_ROLE_ID = "3423789005821014377"
 
@@ -30,21 +37,31 @@ SERVER = os.environ.get("GAME_SERVER", "").strip() or DEFAULT_SERVER
 ROLE_ID = os.environ.get("GAME_ROLE_ID", "").strip() or DEFAULT_ROLE_ID
 
 
-async def select_server(page):
-    """选择服务器，按可见文本做包含匹配（比严格 label 匹配更容错）。"""
-    await page.wait_for_selector("select#server", timeout=15000)
-    options = await page.query_selector_all("select#server option")
-    matched = None
-    for opt in options:
-        text = (await opt.inner_text()).strip()
-        if SERVER in text or text in SERVER:
-            matched = opt
+async def select_server(page, server_name):
+    """打开服务器弹窗，切到大区 tab 直到目标服务器可见并点击。"""
+    await page.click("#Server")
+    await page.wait_for_selector("#ServerModal", state="visible", timeout=10000)
+    await page.wait_for_timeout(500)
+
+    tabs = await page.query_selector_all(".ServerListTab li")
+    target = None
+    for tab in tabs:
+        await tab.click()
+        await page.wait_for_timeout(400)
+        candidates = await page.query_selector_all("span.ServerName")
+        for c in candidates:
+            txt = (await c.inner_text()).strip()
+            if server_name in txt and await c.is_visible():
+                target = c
+                break
+        if target:
             break
-    if matched is None:
-        raise SystemExit(f"未在服务器下拉框中找到匹配项: {SERVER!r}")
-    value = await matched.get_attribute("value")
-    await page.select_option("select#server", value=value)
-    print(f"已选择服务器: {(await matched.inner_text()).strip()}")
+
+    if target is None:
+        raise SystemExit(f"未在服务器列表中找到匹配项: {server_name!r}")
+    await target.click()
+    await page.wait_for_timeout(1000)  # 等待弹窗关闭、列表刷新
+    print(f"已选择服务器: {server_name}")
 
 
 async def main():
@@ -52,34 +69,44 @@ async def main():
         raise SystemExit("请在环境变量 / Secrets 中设置 GAME_SERVER 和 GAME_ROLE_ID")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
         page = await browser.new_page()
         try:
             await page.goto(URL, wait_until="networkidle")
+            await page.wait_for_timeout(2000)
 
-            await select_server(page)
-            await page.fill("input#roleId", ROLE_ID)
-            await page.wait_for_timeout(1000)  # 等待页面根据输入刷新兑换码列表
+            await select_server(page, SERVER)
+            await page.fill("#roleid", ROLE_ID)
+            await page.wait_for_timeout(2000)  # 等待兑换码列表按服务器+角色加载
 
-            # 多轮点击：每点一个按钮，页面状态会变，新按钮可能出现
+            # 多轮点击：每点一个按钮页面会更新，可能冒出新的可领取项
             total = 0
-            for attempt in range(3):
-                buttons = await page.query_selector_all('button:has-text("领取")')
+            for attempt in range(4):
+                # 领取按钮真实 class 为 .get（可领）；已领/过期为 .got，不会被选中
+                buttons = await page.query_selector_all("span.get, span.get-new, span.get-only")
                 if not buttons:
                     print(f"第 {attempt + 1} 轮已无可领取的按钮")
                     break
-                print(f"第 {attempt + 1} 轮发现 {len(buttons)} 个可领取的兑换码")
+                print(f"第 {attempt + 1} 轮发现 {len(buttons)} 个可领取项")
                 for btn in buttons:
                     try:
+                        label = (await btn.inner_text()).strip()
                         await btn.click()
-                        await page.wait_for_timeout(2000)  # 等待请求 / 签名完成
-                        print("已点击一个领取按钮")
+                        await page.wait_for_timeout(2500)  # 等待 AJAX 领取完成
+                        print(f"已点击: {label}")
                         total += 1
                     except Exception as e:
-                        print(f"点击失败: {e}")
+                        print(f"点击失败 ({label}): {e}")
                 await page.wait_for_timeout(1500)
 
             print(f"本次共点击领取 {total} 个兑换码")
+        except Exception:
+            # 打印完整堆栈，方便在 GitHub Actions 日志里定位问题
+            traceback.print_exc()
+            raise
         finally:
             await browser.close()
 
