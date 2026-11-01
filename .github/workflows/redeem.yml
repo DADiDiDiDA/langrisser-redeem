@@ -1,0 +1,32 @@
+name: Redeem Langrisser Codes
+
+on:
+  schedule:
+    # 每 12 小时运行一次（UTC 时间：0:00 与 12:00），可按需调整
+    - cron: "0 */12 * * *"
+  # 允许在 Actions 页面手动触发
+  workflow_dispatch:
+
+jobs:
+  redeem:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          # 安装 Chromium 及其系统依赖（ubuntu-latest 默认已是 root，--with-deps 可用）
+          playwright install --with-deps chromium
+
+      # 服务器与角色 ID 已内置于 redeem.py（热爱无限 / 3423789005821014377）。
+      # 如需临时覆盖，可在此 step 加 env: GAME_SERVER / GAME_ROLE_ID。
+      - name: Run redeem script
+        run: python redeem.py
