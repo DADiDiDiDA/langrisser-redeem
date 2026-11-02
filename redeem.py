@@ -35,7 +35,7 @@ ROLE_ID = os.environ.get("GAME_ROLE_ID", "").strip()
 
 # 运行结果写入此文件，供钉钉通知步骤读取
 RESULT_FILE = "redeem_result.txt"
-# 已领取过的兑换码名称记录（跨运行去重，由 CI artifact 持久化）
+# 已领取过的兑换码名称记录（跨运行去重，运行后提交回仓库，下次 checkout 自动拉取）
 HISTORY_FILE = os.environ.get("CLAIMED_HISTORY", "claimed_history.txt")
 
 
