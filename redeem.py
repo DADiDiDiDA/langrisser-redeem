@@ -35,6 +35,8 @@ ROLE_ID = os.environ.get("GAME_ROLE_ID", "").strip()
 
 # 运行结果写入此文件，供钉钉通知步骤读取
 RESULT_FILE = "redeem_result.txt"
+# 已领取过的兑换码名称记录（跨运行去重，由 CI artifact 持久化）
+HISTORY_FILE = os.environ.get("CLAIMED_HISTORY", "claimed_history.txt")
 
 
 async def select_server(page, server_name):
@@ -74,8 +76,12 @@ async def main():
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
         page = await browser.new_page()
+        history = load_history()  # 跨运行去重：加载已领取记录
         try:
-            await page.goto(URL, wait_until="networkidle")
+            # 用 domcontentloaded + 显式等待关键元素，避免 networkidle 因页面持续
+            # 网络活动（轮询）在 CI 上超时。关键元素 #Server 出现即代表主体已加载。
+            await page.goto(URL, wait_until="domcontentloaded")
+            await page.wait_for_selector("#Server", state="visible", timeout=30000)
             await page.wait_for_timeout(2000)
 
             await select_server(page, SERVER)
@@ -95,6 +101,7 @@ async def main():
                     break
                 print(f"第 {attempt + 1} 轮发现 {len(buttons)} 个可领取项")
                 for btn in buttons:
+                    name = ""
                     try:
                         # 找到该按钮所在行的兑换码名称（td.cdkey-name）
                         name = await btn.evaluate(
@@ -102,12 +109,28 @@ async def main():
                             " if(!n) return ''; const c=n.querySelector('.cdkey-name');"
                             " return c ? c.innerText.trim() : ''; }"
                         )
+                        if name and name in history:
+                            print(f"跳过（已领取过）: {name}")
+                            continue
                         await btn.click()
                         await page.wait_for_timeout(2000)  # 每个兑换码领取间隔 2 秒
-                        print(f"已领取: {name or '(未知名称)'}")
-                        if name:
+                        # 校验：点击后该码按钮应即时变为「已领」(class 含 got)，
+                        # 才计入已领取；若仍显示可领，说明本次未生效。
+                        now_cls = await page.evaluate(
+                            "(nm) => { const tr = Array.from(document.querySelectorAll('tr.cdkey-tr'))"
+                            ".find(t => { const c=t.querySelector('.cdkey-name');"
+                            " return c && c.innerText.trim()===nm; });"
+                            " if(!tr) return ''; const s=tr.querySelector('.cdkey-acti span');"
+                            " return s ? s.className : ''; }",
+                            name,
+                        )
+                        if name and ("got" in now_cls):
+                            print(f"已领取: {name}")
                             claimed_codes.append(name)
-                        total += 1
+                            history.add(name)
+                            total += 1
+                        else:
+                            print(f"领取未生效（按钮仍显示可领）: {name}")
                     except Exception as e:
                         print(f"点击失败 ({name}): {e}")
                 await page.wait_for_timeout(2000)
@@ -120,6 +143,10 @@ async def main():
             traceback.print_exc()
             raise
         finally:
+            try:
+                save_history(history)
+            except Exception:
+                pass
             await browser.close()
 
 
@@ -132,6 +159,30 @@ def _write_result(status, claimed, codes=None):
             f.write(f"STATUS={status}\nCLAIMED={claimed}\n")
             for c in (codes or []):
                 f.write(f"CODE={c}\n")
+    except Exception:
+        pass
+
+
+def load_history():
+    """读取已领取过的兑换码名称集合（跨运行去重）。"""
+    s = set()
+    try:
+        with open(HISTORY_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    s.add(line)
+    except FileNotFoundError:
+        pass
+    return s
+
+
+def save_history(hist):
+    """把已领取记录写回文件，供下次运行 / CI artifact 读取。"""
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            for c in sorted(hist):
+                f.write(c + "\n")
     except Exception:
         pass
 
