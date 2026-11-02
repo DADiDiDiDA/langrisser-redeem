@@ -82,8 +82,11 @@ async def main():
             await page.fill("#roleid", ROLE_ID)
             await page.wait_for_timeout(2000)  # 等待兑换码列表按服务器+角色加载
 
-            # 多轮点击：每点一个按钮页面会更新，可能冒出新的可领取项
+            # 多轮点击：每点一个按钮页面会更新，可能冒出新的可领取项。
+            # 重要：只选择 span.get（可领）。已领取 / 过期的按钮 class 为 .got，
+            # 不会被选中，因此【已领取的兑换码不会重复领取】。
             total = 0
+            claimed_codes = []
             for attempt in range(4):
                 # 领取按钮真实 class 为 .get（可领）；已领/过期为 .got，不会被选中
                 buttons = await page.query_selector_all("span.get, span.get-new, span.get-only")
@@ -93,19 +96,26 @@ async def main():
                 print(f"第 {attempt + 1} 轮发现 {len(buttons)} 个可领取项")
                 for btn in buttons:
                     try:
-                        label = (await btn.inner_text()).strip()
+                        # 找到该按钮所在行的兑换码名称（td.cdkey-name）
+                        name = await btn.evaluate(
+                            "el => { let n=el; while(n && n.tagName!=='TR'){ n=n.parentElement; }"
+                            " if(!n) return ''; const c=n.querySelector('.cdkey-name');"
+                            " return c ? c.innerText.trim() : ''; }"
+                        )
                         await btn.click()
-                        await page.wait_for_timeout(2500)  # 等待 AJAX 领取完成
-                        print(f"已点击: {label}")
+                        await page.wait_for_timeout(2000)  # 每个兑换码领取间隔 2 秒
+                        print(f"已领取: {name or '(未知名称)'}")
+                        if name:
+                            claimed_codes.append(name)
                         total += 1
                     except Exception as e:
-                        print(f"点击失败 ({label}): {e}")
-                await page.wait_for_timeout(1500)
+                        print(f"点击失败 ({name}): {e}")
+                await page.wait_for_timeout(2000)
 
-            print(f"本次共点击领取 {total} 个兑换码")
-            _write_result("success", total)
+            print(f"本次共领取 {total} 个兑换码")
+            _write_result("success", total, claimed_codes)
         except Exception:
-            _write_result("failed", 0)
+            _write_result("failed", 0, [])
             # 打印完整堆栈，方便在 GitHub Actions 日志里定位问题
             traceback.print_exc()
             raise
@@ -113,11 +123,15 @@ async def main():
             await browser.close()
 
 
-def _write_result(status, claimed):
-    """把运行结果写入文件，供通知步骤读取。"""
+def _write_result(status, claimed, codes=None):
+    """把运行结果写入文件，供通知步骤读取。
+    codes: 本次领取到的兑换码名称列表（可选）。
+    """
     try:
         with open(RESULT_FILE, "w", encoding="utf-8") as f:
             f.write(f"STATUS={status}\nCLAIMED={claimed}\n")
+            for c in (codes or []):
+                f.write(f"CODE={c}\n")
     except Exception:
         pass
 

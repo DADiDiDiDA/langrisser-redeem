@@ -29,6 +29,7 @@ RUN_URL = os.environ.get("RUN_URL", "").strip()
 # 读取脚本写出的结果
 status = JOB_STATUS
 claimed = 0
+codes = []
 try:
     with open("redeem_result.txt", encoding="utf-8") as f:
         for line in f:
@@ -37,6 +38,10 @@ try:
                 status = line.split("=", 1)[1]
             elif line.startswith("CLAIMED="):
                 claimed = int((line.split("=", 1)[1] or "0").strip() or 0)
+            elif line.startswith("CODE="):
+                name = line.split("=", 1)[1].strip()
+                if name:
+                    codes.append(name)
 except FileNotFoundError:
     pass
 
@@ -48,8 +53,15 @@ text = (
     f"### 🎮 梦幻模拟战 BWIKI 自动领取\n\n"
     f"- **运行状态**：{'成功 ✅' if ok else '失败 ❌'}\n"
     f"- **本次领取**：{claimed_text} 兑换码\n"
-    f"- **执行时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
 )
+# 明细：列出本次领取到的具体兑换码名称（最多 30 条，超出提示总数）
+if ok and codes:
+    shown = codes[:30]
+    detail = "\n".join(f"  - {c}" for c in shown)
+    if len(codes) > len(shown):
+        detail += f"\n  - …等共 {len(codes)} 个"
+    text += f"- **领取明细**：\n{detail}\n"
+text += f"- **执行时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
 if RUN_URL:
     text += f"- **运行详情**：[点击查看 GitHub Actions 日志]({RUN_URL})\n"
 
