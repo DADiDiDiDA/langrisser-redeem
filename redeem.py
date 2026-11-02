@@ -93,6 +93,7 @@ async def main():
             # 不会被选中，因此【已领取的兑换码不会重复领取】。
             total = 0
             claimed_codes = []
+            skipped_codes = set()  # 本次因已领过而跳过的唯一兑换码名
             for attempt in range(4):
                 # 领取按钮真实 class 为 .get（可领）；已领/过期为 .got，不会被选中
                 buttons = await page.query_selector_all("span.get, span.get-new, span.get-only")
@@ -111,6 +112,7 @@ async def main():
                         )
                         if name and name in history:
                             print(f"跳过（已领取过）: {name}")
+                            skipped_codes.add(name)
                             continue
                         await btn.click()
                         await page.wait_for_timeout(2000)  # 每个兑换码领取间隔 2 秒
@@ -135,10 +137,10 @@ async def main():
                         print(f"点击失败 ({name}): {e}")
                 await page.wait_for_timeout(2000)
 
-            print(f"本次共领取 {total} 个兑换码")
-            _write_result("success", total, claimed_codes)
+            print(f"本次共领取 {total} 个兑换码，跳过 {len(skipped_codes)} 个已领取过的")
+            _write_result("success", total, claimed_codes, len(skipped_codes))
         except Exception:
-            _write_result("failed", 0, [])
+            _write_result("failed", 0, [], 0)
             # 打印完整堆栈，方便在 GitHub Actions 日志里定位问题
             traceback.print_exc()
             raise
@@ -150,13 +152,14 @@ async def main():
             await browser.close()
 
 
-def _write_result(status, claimed, codes=None):
+def _write_result(status, claimed, codes=None, skipped=0):
     """把运行结果写入文件，供通知步骤读取。
     codes: 本次领取到的兑换码名称列表（可选）。
+    skipped: 因已领取过而跳过的兑换码数量。
     """
     try:
         with open(RESULT_FILE, "w", encoding="utf-8") as f:
-            f.write(f"STATUS={status}\nCLAIMED={claimed}\n")
+            f.write(f"STATUS={status}\nCLAIMED={claimed}\nSKIPPED={skipped}\n")
             for c in (codes or []):
                 f.write(f"CODE={c}\n")
     except Exception:

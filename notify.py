@@ -29,6 +29,7 @@ RUN_URL = os.environ.get("RUN_URL", "").strip()
 # 读取脚本写出的结果
 status = JOB_STATUS
 claimed = 0
+skipped = 0
 codes = []
 try:
     with open("redeem_result.txt", encoding="utf-8") as f:
@@ -38,6 +39,8 @@ try:
                 status = line.split("=", 1)[1]
             elif line.startswith("CLAIMED="):
                 claimed = int((line.split("=", 1)[1] or "0").strip() or 0)
+            elif line.startswith("SKIPPED="):
+                skipped = int((line.split("=", 1)[1] or "0").strip() or 0)
             elif line.startswith("CODE="):
                 name = line.split("=", 1)[1].strip()
                 if name:
@@ -48,11 +51,13 @@ except FileNotFoundError:
 ok = status == "success"
 title = "✅ 梦幻模拟战 兑换码自动领取成功" if ok else "❌ 梦幻模拟战 兑换码自动领取失败"
 claimed_text = f"**{claimed} 个**" if ok else "—"
+skipped_text = f"**{skipped} 个**" if ok else "—"
 
 text = (
     f"### 🎮 梦幻模拟战 BWIKI 自动领取\n\n"
     f"- **运行状态**：{'成功 ✅' if ok else '失败 ❌'}\n"
-    f"- **本次领取**：{claimed_text} 兑换码\n"
+    f"- **本次新领取**：{claimed_text} 兑换码\n"
+    f"- **已跳过（此前已领）**：{skipped_text}\n"
 )
 # 明细：列出本次领取到的具体兑换码名称（最多 30 条，超出提示总数）
 if ok and codes:
