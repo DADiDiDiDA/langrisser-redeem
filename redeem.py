@@ -12,12 +12,12 @@ Langrisser (梦幻模拟战) BWIKI 兑换码自动领取脚本
   - 领取按钮：span.get（可领，文本「领取」）；已领/过期为 span.got，不会被选中，
     因此按 class 选取可避免重复点击。
 
-账号已内置默认值：服务器「热爱无限」、角色 ID「3423789005821014377」。
-如需覆盖，仍可用环境变量（非空时优先）：
-  GAME_SERVER  游戏区服/子服务器名称
+服务器与角色 ID 通过环境变量提供（在 GitHub Secrets 中配置 GAME_SERVER / GAME_ROLE_ID，
+或本地调试时导出）：
+  GAME_SERVER  游戏区服/子服务器名称（如「热爱无限」）
   GAME_ROLE_ID 角色 ID（游戏内左上角头像处查看）
 
-本地调试（覆盖默认值示例）：
+本地调试示例：
   GAME_SERVER="热爱无限" GAME_ROLE_ID="3423789005821014377" python redeem.py
 """
 
@@ -29,12 +29,12 @@ from playwright.async_api import async_playwright
 
 URL = "https://wiki.biligame.com/langrisser/Giftcode"
 
-# 默认值已按你的账号填好；如需覆盖，仍可通过环境变量 / Secrets 设置
-DEFAULT_SERVER = "热爱无限"
-DEFAULT_ROLE_ID = "3423789005821014377"
+# 服务器与角色 ID 必须从环境变量读取（GitHub Secrets：GAME_SERVER / GAME_ROLE_ID）
+SERVER = os.environ.get("GAME_SERVER", "").strip()
+ROLE_ID = os.environ.get("GAME_ROLE_ID", "").strip()
 
-SERVER = os.environ.get("GAME_SERVER", "").strip() or DEFAULT_SERVER
-ROLE_ID = os.environ.get("GAME_ROLE_ID", "").strip() or DEFAULT_ROLE_ID
+# 运行结果写入此文件，供钉钉通知步骤读取
+RESULT_FILE = "redeem_result.txt"
 
 
 async def select_server(page, server_name):
@@ -66,7 +66,7 @@ async def select_server(page, server_name):
 
 async def main():
     if not SERVER or not ROLE_ID:
-        raise SystemExit("请在环境变量 / Secrets 中设置 GAME_SERVER 和 GAME_ROLE_ID")
+        raise SystemExit("请在环境变量 / GitHub Secrets 中设置 GAME_SERVER 和 GAME_ROLE_ID")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -103,12 +103,23 @@ async def main():
                 await page.wait_for_timeout(1500)
 
             print(f"本次共点击领取 {total} 个兑换码")
+            _write_result("success", total)
         except Exception:
+            _write_result("failed", 0)
             # 打印完整堆栈，方便在 GitHub Actions 日志里定位问题
             traceback.print_exc()
             raise
         finally:
             await browser.close()
+
+
+def _write_result(status, claimed):
+    """把运行结果写入文件，供通知步骤读取。"""
+    try:
+        with open(RESULT_FILE, "w", encoding="utf-8") as f:
+            f.write(f"STATUS={status}\nCLAIMED={claimed}\n")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

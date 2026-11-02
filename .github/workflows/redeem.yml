@@ -26,7 +26,19 @@ jobs:
           # 安装 Chromium 及其系统依赖（ubuntu-latest 默认已是 root，--with-deps 可用）
           playwright install --with-deps chromium
 
-      # 服务器与角色 ID 已内置于 redeem.py（热爱无限 / 3423789005821014377）。
-      # 如需临时覆盖，可在此 step 加 env: GAME_SERVER / GAME_ROLE_ID。
+      # 服务器与角色 ID 从 GitHub Secrets 读取（GAME_SERVER / GAME_ROLE_ID）
       - name: Run redeem script
+        env:
+          GAME_SERVER: ${{ secrets.GAME_SERVER }}
+          GAME_ROLE_ID: ${{ secrets.GAME_ROLE_ID }}
         run: python redeem.py
+
+      # 无论领取成功与否，都把结果推送到钉钉机器人
+      - name: Notify DingTalk
+        if: always()
+        env:
+          DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
+          DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python notify.py
